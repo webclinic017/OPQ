@@ -16,6 +16,10 @@ import calc
 from util import *
 
 
+# Control the metrics to calculate. Must match the names defined in "calc.py"
+METRICS = ["CoInt"]
+
+
 
 def generate_jobs(stock_data_folder, filename):
     '''
@@ -65,14 +69,23 @@ def do_worker(q_in, q_out):
             break
         job_id, stock_x, stock_y, df_stock_x, df_stock_y = job
         
-        result_df = pd.DataFrame(columns=(['index', 'Stock_1', 'Stock_2'] + calc.metrics))
+        result_df = pd.DataFrame(columns=(['index', 'Stock_1', 'Stock_2'] + METRICS))
         result_df['index'] = [job_id]
         result_df['Stock_1'] = [stock_x]
         result_df['Stock_2'] = [stock_y]
-        for metric in calc.metrics:
+        for metric in METRICS:
             metric_calc_method = getattr(calc, "calc_" + metric)
-            result_df[metric] = metric_calc_method(df_stock_x, df_stock_y)
-
+            metric_res = metric_calc_method(df_stock_x, df_stock_y)
+            if type(metric_res) is float or type(metric_res) is int:
+                result_df[metric] = metric_res
+            elif type(metric_res) is dict:
+                for sub_metric, sub_val in metric_res.items():
+                    result_df[metric + '_' + sub_metric] = sub_val
+            elif type(metric_res) is list:
+                for i, sub_val in enumerate(metric_res):
+                    result_df[metric + '_' + i] = sub_val
+            else:
+                raise Exception("Unknown calculation result type")
         done_job = [job_id, stock_x, stock_y, result_df]
         q_out.put(done_job)
 
@@ -100,7 +113,7 @@ def main():
     Stock_Data = load_stock_data(stock_data_folder)
     for code, df in Stock_Data.items():
         calc.preprocess(df)
-        Stock_Data[code] = df[(df['Date'] >= training_start) & (df['Date'] <= training_end)]
+        Stock_Data[code] = df.loc[training_start : training_end]
     write_log("All stock data loaded and preprocessed", log_file)
     
     # 3. Load the job status for the worker
@@ -186,7 +199,10 @@ def main():
                 output_filename = generate_new_output_file(output_folder)
     output_df.to_csv(output_filename, index=False)
 
-    write_log("All jobs completed. Training program exit", log_file)
+    write_log("All jobs completed. Merging output files...", log_file)
+    merge_output(output_folder, os.path.join(output_folder, "out_merged.csv"))
+
+    write_log("All completed. Program Exit", log_file)
 
 
 if __name__ == "__main__":

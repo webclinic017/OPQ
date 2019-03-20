@@ -7,6 +7,8 @@ Functions to calculate the metrics for the investing system.
 
 import pandas as pd
 import numpy as np
+import scipy.stats as st
+
 
 
 
@@ -106,8 +108,6 @@ def calc_SCC_SMA3(stock_x, stock_y):
 
     return 1 - ( 6 * df['diff_sq'].sum() / (n**3 - n) )
 
-    return 0
-
 
 def calc_SSD_raw(stock_x, stock_y):
     '''
@@ -135,6 +135,31 @@ def calc_SSD_SMA3(stock_x, stock_y):
     return df['diff_sq'].mean()
 
 
-metrics = [a[5:] for a in dir() if a[:5] == "calc_"]
+def calc_CoInt(stock_x, stock_y):
+    '''
+    Simplified cointegration method. Assume that
+        X - beta * Y = u
+    and u is "stationary".
+    Find the beta, Coeffecient or Variation of u and R-squared of the linear regression.
+    '''
+
+    df = stock_x.join(stock_y, how="inner", lsuffix="_X", rsuffix="_Y").dropna()
+
+    linreg = st.linregress(df['CLOSE_X'], df['CLOSE_Y'])
+    beta = linreg.slope
+    rsq = linreg.rvalue
+
+    return {
+        "beta": linreg.slope,
+        "alpha": linreg.intercept,
+        "rsq": linreg.rvalue,
+        "pvalue": linreg.pvalue,
+        "stderr": linreg.stderr
+    }
+
+
+
+
+    
 
 
