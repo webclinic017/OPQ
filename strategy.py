@@ -33,7 +33,7 @@ class Strategy:
         for stock, stock_df in stock_data.items():
             if stock in self._stock_data:
                 df = pd.concat([self._stock_data[stock], stock_df])
-                df = df[~df.index.duplicated(keep='last')]
+                #df = df[~df.index.duplicated(keep='last')]
                 self._stock_data[stock] = df
             else:
                 self._stock_data[stock] = stock_df
@@ -237,7 +237,6 @@ class PairTradeStrategy(Strategy):
             try:
                 num_pairs = abs(int(cash_for_each_pair / pair_price))
             except:
-                print("Price error for", stock_x, stock_y)
                 continue
             
             # Positions of the stocks in quantities
