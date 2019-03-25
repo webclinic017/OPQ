@@ -136,7 +136,7 @@ def main():
         try:
             df = pd.read_csv(fname)
         except Exception as e:
-            write_log("When loading output '%s', error: %s" % (fname, str(e)), log_file)
+            write_log("Skipped '%s' due to error: %s" % (fname, str(e)), log_file)
             continue
         for job_id in df['index']:
             jobs_done_ids[str(job_id)] = 0
@@ -206,9 +206,5 @@ def main():
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception as e:
-        print(str(e))
-        input()
+    main()
 

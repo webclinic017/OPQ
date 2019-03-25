@@ -72,18 +72,19 @@ class Strategy:
 class PairTradeStrategy(Strategy):
 
     @staticmethod
-    def select_pairs(file, num_pairs, metric_col, ascending=False, beta_col=None):
+    def select_pairs(file, num_pairs, metric=None, ascending=False, beta=None, filter=None):
         '''
-        Choose pairs of stocks for trading.
+        Choose pairs of stocks.
         '''
 
         if type(file) is str:
             df = pd.read_csv(file)
         else:
             df = file
+        stock_codes = {} # No repeat stock
+        if metric is not None:
+            df.sort_values(metric, ascending=ascending, inplace=True)
         pairs = []
-        stock_codes = {}
-        df.sort_values(metric_col, ascending=ascending, inplace=True)
         for index, row in df.iterrows():
             if len(pairs) >= num_pairs:
                 break
@@ -91,16 +92,18 @@ class PairTradeStrategy(Strategy):
             stock_y = row['Stock_2']
             if stock_x in stock_codes or stock_y in stock_codes:
                 continue
+            if filter and not filter(row):
+                continue
             stock_codes[stock_x] = True
             stock_codes[stock_y] = True
-            beta = row[beta_col] if beta_col else 1
+            beta_ = row[beta] if beta else 1
             pairs.append({
                 'Stock_1': stock_x,
                 'Stock_2': stock_y,
-                'beta': beta
+                'beta': beta_
             })
         return pairs
-
+    
 
     @staticmethod
     def dump_pairs(filename, pairs):

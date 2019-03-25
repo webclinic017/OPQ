@@ -4,6 +4,7 @@ Backtest the strategies.
 '''
 
 import os
+import sys
 import argparse
 
 import pandas as pd
@@ -96,6 +97,7 @@ def evaluate(strategy, config):
     backtesting_end = config['BACKTESTING_END']
     tx_cost_per_share = float(config['TX_COST_PER_SHARE'])
     tx_cost_per_dollar = float(config['TX_COST_PER_DOLLAR'])
+    risk_free_rate = float(config['RISK_FREE_RATE']) * (pd.to_datetime(backtesting_end) - pd.to_datetime(backtesting_start)).days / 360
 
     # Prepare the data for the strategy
     stock_codes = []
@@ -161,7 +163,7 @@ def evaluate(strategy, config):
     performance_metrics = {
         "Final Return": final_return,
         "Volatility": ret_std,
-        "Sharpe Ratio": (final_return - df_metrics['ret'].mean()) / ret_std if ret_std > 0 else np.nan,
+        "Sharpe Ratio": (final_return - risk_free_rate) / ret_std if ret_std > 0 else np.nan,
         "Up Percentage": len([r for r in daily_return if r > 0]) / len(daily_return),
         "Max Drawdown": (min(daily_tnw_aug) - max(daily_tnw_aug)) / max(daily_tnw_aug),
         "Skewness": df_metrics['ret'].skew(),
@@ -171,31 +173,12 @@ def evaluate(strategy, config):
     return performance_metrics
 
 
-def select_pairs_bulk():
-
-    num_pairs = 40
-
-    df = pd.read_csv("Training_Output/top_secret.csv")
-    metrics = [m for m in df][3:]
-    for metric in metrics:
-        asc = (metric[0:3] == "SSD")
-        pairs = PairTradeStrategy.select_pairs(df, num_pairs, metric, asc)
-        PairTradeStrategy.dump_pairs(f"Pairs/top_{num_pairs}_pairs_by_{metric}.csv", pairs)
-        print("Exported", metric)
-
-    df = pd.read_csv("Training_Output/beta_secret.csv")
-    pairs = PairTradeStrategy.select_pairs(df, num_pairs, "CoInt_rsq", False, "CoInt_beta")
-    PairTradeStrategy.dump_pairs(f"Pairs/top_{num_pairs}_pairs_by_CoInt.csv", pairs)
-    print("Exported", "CoInt")
-
-
 
 def evaluate_cumulative_pairs(pairs, config, lower=None, upper=None):
     '''
     Evaluate pairs cumulatively of a portfolio.
+    Returns a pandas DataFrame Object contains the evaluation result.
     '''
-
-   
 
     thresholds = {
         'enter': float(config["ENTER_THRESHOLD"]),
@@ -213,7 +196,7 @@ def evaluate_cumulative_pairs(pairs, config, lower=None, upper=None):
     
     pairs_original = pairs
     columns = None
-    
+    df_result = pd.DataFrame()
     for s in range(lower_start - 1, lower_end):
         for e in range(upper_start, upper_end + 1):
             pairs = pairs_original[s : e]
@@ -222,10 +205,13 @@ def evaluate_cumulative_pairs(pairs, config, lower=None, upper=None):
             if columns is None:
                 columns = ['Start Pair', 'End Pair'] + list(results.keys())
                 print(*columns, sep='\t')
+                df_result = pd.DataFrame(columns=columns)
             results['Start Pair'] = s
             results['End Pair'] = e
+            df_result = df_result.append(results, ignore_index=True)
             print(*[results[c] if type(results[c]) is str else round(results[c], 5) for c in columns], sep='\t')
 
+    return df_result
 
 
 def evaluate_individual_pairs(pairs, config, lower=None, upper=None):
@@ -244,20 +230,25 @@ def evaluate_individual_pairs(pairs, config, lower=None, upper=None):
     if upper is None:
         upper = [len(pairs)]
     upper = int(upper[0])
+
     columns = None
+    df_result = pd.DataFrame()
     for pair in pairs[lower - 1 : upper]:
         strategy = PairTradeStrategy(thresholds, [pair])
         results = evaluate(strategy, config)
         if columns is None:
             columns = ['Stock_1', 'Stock_2'] + list(results.keys())
             print(*columns, sep='\t')
+            df_result = pd.DataFrame(columns=columns)
         results['Stock_1'] = pair['Stock_1']
         results['Stock_2'] = pair['Stock_2']
+        df_result = df_result.append(results, ignore_index=True)
         print(*[results[c] if type(results[c]) is str else round(results[c], 5) for c in columns], sep='\t')
         
+    return df_result
 
 
-if __name__ == "__main__":
+def main(*argv):
 
     config = util.load_config()
 
@@ -274,32 +265,26 @@ if __name__ == "__main__":
                         default=None, nargs='+', help="The lower bound of number of pairs or the starting pair indices.")
     parser.add_argument('-u', '--upper', dest="upper",
                         default=None, nargs='+', help="The upper bound of number of pairs or the ending pair indices.")
-    config_params = [
-        "BACKTESTING_START",
-        "BACKTESTING_END",
-        "EXIT_THRESHOLD",
-        "ENTER_THRESHOLD",
-        "STOP_THRESHOLD",
-        "TX_COST_PER_SHARE",
-        "TX_COST_PER_DOLLAR"
-    ]
-    for param in config_params:
+    parser.add_argument('-o', '--out', dest="out_file",
+                        default=None, help="The file to store backtesting results.")
+    
+    for param in config.keys():
         parser.add_argument(f'--{param}', dest=param,
                             default=None, help="Overwrite this parameter in config.txt")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     
-    for param in config_params:
-        if param in config and getattr(args, param) is not None:
+    for param in config:
+        if getattr(args, param) is not None:
             config[param] = getattr(args, param)
     print_config(config)
-    print()
 
+    result = pd.DataFrame()
     if args.in_file:
         pairs = PairTradeStrategy.load_pairs(args.in_file)
         if args.indiv:
-            evaluate_individual_pairs(pairs, config, args.lower, args.upper)
+            result = evaluate_individual_pairs(pairs, config, args.lower, args.upper)
         else:
-            evaluate_cumulative_pairs(pairs, config, args.lower, args.upper)
+            result = evaluate_cumulative_pairs(pairs, config, args.lower, args.upper)
     elif args.pairs:
         pairs = []
         for pair in args.pairs:
@@ -309,28 +294,31 @@ if __name__ == "__main__":
                 'beta': float(pair[2] if len(pair) >= 3 else 1)
             })
         if args.indiv:
-            evaluate_individual_pairs(pairs, config, args.lower, args.upper)
+            result = evaluate_individual_pairs(pairs, config, args.lower, args.upper)
         else:
-            evaluate_cumulative_pairs(pairs, config, args.lower, args.upper)
+            result = evaluate_cumulative_pairs(pairs, config, args.lower, args.upper)
     else:
         for fname in os.listdir(args.in_directory):
-            print("File:", fname)
+            print("\nFile:", fname)
             fname = os.path.join(args.in_directory, fname)
             pairs = PairTradeStrategy.load_pairs(fname)
             if args.indiv:
-                evaluate_individual_pairs(pairs, config, args.lower, args.upper)
+                result_cur = evaluate_individual_pairs(pairs, config, args.lower, args.upper)
             else:
-                evaluate_cumulative_pairs(pairs, config, args.lower, args.upper)
-            print()
+                result_cur = evaluate_cumulative_pairs(pairs, config, args.lower, args.upper)
+            result_cur.insert(0, "File", fname)
+            result = pd.concat([result, result_cur])
+
+    if args.out_file is not None:
+        result.to_csv(args.out_file, index=False)
+                
 
     input("\nDone")
 
 
 
-
-
-
-
+if __name__ == "__main__":
+    main(*sys.argv[1:])
 
 
 

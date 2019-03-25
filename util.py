@@ -97,7 +97,10 @@ def merge_output(input_folder, output_file):
     for fname in os.listdir(input_folder):
         fname = os.path.join(input_folder, fname)
         print("Merging %s" % fname)
-        df = pd.read_csv(fname)
+        try:
+            df = pd.read_csv(fname)
+        except:
+            continue
         out_df = pd.concat([out_df, df])  
     out_df = out_df.drop_duplicates(subset='index', keep='first')
 
