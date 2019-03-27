@@ -17,7 +17,6 @@ POSITION_EMPTY = 0
 class Strategy:
     '''
     The abstract base class strategy.
-    
     '''
 
     def __init__(self):
@@ -69,7 +68,22 @@ class Strategy:
 
 
 
+class StockPair:
+    '''
+    A pair of stock for trading.
+    '''
+
+    def __init__(self, X, Y, beta=1):
+        self.X = X
+        self.Y = Y
+        self.beta = beta
+        self.position = POSITION_EMPTY
+
+
 class PairTradeStrategy(Strategy):
+    '''
+    Pair trading strategy.
+    '''
 
     @staticmethod
     def select_pairs(file, num_pairs, metric=None, ascending=False, beta=None, filter=None):
@@ -119,7 +133,7 @@ class PairTradeStrategy(Strategy):
     @staticmethod
     def load_pairs(filename):
         '''
-        Load pairs from a file.
+        Load pairs from a csv file.
         '''
         
         pairs = []

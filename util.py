@@ -71,10 +71,14 @@ def load_stock_data(folder, stock_codes=None):
     
     data = {}
     for fname in filenames:
-        stock_code = get_stock_code(fname)
-        df = pd.read_csv(os.path.join(folder, fname))
-        data[stock_code] = df.set_index("Date")
-
+        if fname[-4:] == '.csv':
+            stock_code = get_stock_code(fname)
+            try:
+                df = pd.read_csv(os.path.join(folder, fname))
+            except:
+                print("Skipped ", fname)
+                continue
+            data[stock_code] = df.set_index("Date")
     return data
 
 
@@ -91,8 +95,7 @@ def merge_output(input_folder, output_file):
     '''
     Merge output files into one.
     '''
-
-    create_dir_and_file(output_file)
+    
     out_df = pd.DataFrame()
     for fname in os.listdir(input_folder):
         fname = os.path.join(input_folder, fname)
@@ -103,7 +106,8 @@ def merge_output(input_folder, output_file):
             continue
         out_df = pd.concat([out_df, df])  
     out_df = out_df.drop_duplicates(subset='index', keep='first')
-
+    
+    create_dir_and_file(output_file)
     out_df.to_csv(output_file, index=False)
     print("Merged complete")
 
