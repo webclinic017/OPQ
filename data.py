@@ -5,14 +5,61 @@ Get stock data.
 
 from urllib import request
 from urllib import parse
+import os
+import time
+import datetime
+import sched
 import re
 import threading
 
+import pandas as pd
+try:
+    import eikon as ek
+except:
+    pass
+
+import util
 
 
-def get_stock_prices(stocks):
+def update_all():
     '''
-    Get the real-time price for each stock. "Real-time" is relative as yahoo data has delay of 15min.
+    Update the daily data for all stocks in the stock data folder.
+    '''
+
+    config = util.import_config()
+
+    s = sched.scheduler(time.time, time.sleep)
+    ek.set_app_key('66063f6d35e4453ebba0696f40307bc61e7172f2')
+    
+    stock_folder = config['STOCK_DATA_FOLDER']
+
+    # Get the current date in US
+    tz_us = datetime.timezone(datetime.timedelta(hours=-5))
+    tz_hk = datetime.timezone(datetime.timedelta(hours=8))
+    dt = datetime.datetime(*time.localtime()[:6], tzinfo=tz_hk)
+    end_date = dt.astimezone(tz_us).strftime("%Y-%m-%d")
+
+    for fname in os.listdir(stock_folder):
+        stock_code = util.get_stock_code(fname)
+        stock_df = pd.read_csv(os.path.join(stock_folder, fname))
+        start_date = max(stock_df["Date"])
+        try: 
+            new_df = ek.get_timeseries(stock_code, start_date=start_date, end_date=end_date).reset_index()
+            new_df["Date"] = new_df["Date"][0:10]
+            stock_df = stock_df.append(new_df)
+            stock_df = stock_df.reindex(columns=["Date", "HIGH", "CLOSE", "LOW", "OPEN", "COUNT", "VOLUME"])
+            stock_file.to_csv(os.path.join(stock_folder, fname), index=False)
+            #time.sleep(5.0 - ((time.time() - start_time) % 5.0))
+        except Exception as e:
+            print("Error in acquiring data for", stock_code)
+            print(str(e))
+
+
+
+def get_current_price(stocks):
+    '''
+    Get the real-time price from yahoo finance. "Real-time" is relative as yahoo finance data has delay of 15min.
+    Return a dict with key being stock code and value being the current price (for those succesful).
     '''
 
     WorkerThread.Stock_Data = {}
@@ -27,25 +74,26 @@ def get_stock_prices(stocks):
     return WorkerThread.Stock_Data.copy()
 
 
-def get_response(url, headers=dict()):
-    headers['User-Agent'] = "Mozilla/5.0 (X11; Linux i686) AppleWebKit/537.17 (KHTML, like Gecko) Chrome/24.0.1312.27 Safari/537.17"
-    try:
-        req = request.Request(url, headers=headers)
-        resp = request.urlopen(req)
-        encoding = 'utf-8'
-        for val in resp.getheader('Content-Type').split(';'):
-            if 'charset' in val:
-                encoding = val.split('=')[-1].strip()
-        if resp.readable():
-            return resp.read().decode(encoding)
-    except:
-        return ''
-
 
 
 class WorkerThread(threading.Thread):
 
     Stock_Data = {}
+
+    @staticmethod
+    def get_response(url, headers=dict()):
+        headers['User-Agent'] = "Mozilla/5.0 (X11; Linux i686) AppleWebKit/537.17 (KHTML, like Gecko) Chrome/24.0.1312.27 Safari/537.17"
+        try:
+            req = request.Request(url, headers=headers)
+            resp = request.urlopen(req)
+            encoding = 'utf-8'
+            for val in resp.getheader('Content-Type').split(';'):
+                if 'charset' in val:
+                    encoding = val.split('=')[-1].strip()
+            if resp.readable():
+                return resp.read().decode(encoding)
+        except:
+            return ''
 
     def __init__(self, stock_code):
         super().__init__()
@@ -54,14 +102,14 @@ class WorkerThread(threading.Thread):
     def run(self):
         ticker = self.stock_code.split('.')[0]
         url = f"https://finance.yahoo.com/quote/{ticker}"
-        rdata = get_response(url, headers=dict())
+        rdata = WorkerThread.get_response(url)
         res = re.findall(r"<span.*?data-reactid=['\"]34['\"]>([0-9\.,]*?)</span>", rdata)
         if res:
             WorkerThread.Stock_Data[self.stock_code] = float(res[0].replace(',',''))
         else:
             print("Failed to get data for", self.stock_code)
 
-
+# Testing
 stocks_test = [
     'AFG.N',
     'ROP.N',
