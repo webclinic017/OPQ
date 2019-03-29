@@ -4,13 +4,9 @@ Implementations of (daily) Pair's Trading strategies.
 
 '''
 
+import time
 
 import pandas as pd
-
-
-POSITION_LONG = 1
-POSITION_SHORT = -1
-POSITION_EMPTY = 0
 
 
 
@@ -22,7 +18,18 @@ class Strategy:
     def __init__(self):
         self._positions = {}
         self._stock_data = {}
+        self.today = time.strftime("%Y-%m-%d")
 
+
+    def now(self, date=None):
+        '''
+        Get/Set the point of time of the strategy.
+        {date} should be a string
+        '''
+        if date is not None:
+            self.today = date
+        return self.today
+    
 
     def feed(self, stock_data):
         '''
@@ -32,7 +39,7 @@ class Strategy:
         for stock, stock_df in stock_data.items():
             if stock in self._stock_data:
                 df = pd.concat([self._stock_data[stock], stock_df])
-                #df = df[~df.index.duplicated(keep='last')]
+                df = df[~df.index.duplicated(keep='last')]
                 self._stock_data[stock] = df
             else:
                 self._stock_data[stock] = stock_df
@@ -68,16 +75,21 @@ class Strategy:
 
 
 
-class StockPair:
+class HoldingPair:
     '''
-    A pair of stock for trading.
+    A pair of stock in held.
     '''
 
-    def __init__(self, X, Y, beta=1):
+    def __init__(self, X, Y, beta=1, money_allocated=0):
         self.X = X
         self.Y = Y
         self.beta = beta
-        self.position = POSITION_EMPTY
+        self.money_allocated = money_allocated
+        self.spread_mean = 0
+        self.spread_std = 0
+        self.level = 0
+        self.X_quantity = 0
+        self.Y_quantity = 0
 
 
 class PairTradeStrategy(Strategy):
@@ -86,7 +98,7 @@ class PairTradeStrategy(Strategy):
     '''
 
     @staticmethod
-    def select_pairs(file, num_pairs, metric=None, ascending=False, beta=None, filter=None):
+    def select_pairs(file, num_pairs, metric=None, ascending=False, unique=False, beta=None, filter=None):
         '''
         Choose pairs of stocks.
         '''
@@ -104,7 +116,7 @@ class PairTradeStrategy(Strategy):
                 break
             stock_x = row['Stock_1']
             stock_y = row['Stock_2']
-            if stock_x in stock_codes or stock_y in stock_codes:
+            if unique and stock_x in stock_codes or stock_y in stock_codes:
                 continue
             if filter and not filter(row):
                 continue
@@ -147,85 +159,119 @@ class PairTradeStrategy(Strategy):
         return pairs
     
 
-    def __init__(self, thresholds, pairs, initial_cash=0):
+    def __init__(self, pairs, thresholds, allocations):
         '''
-        {thresholds} is a dict and must include keys 'enter', 'exit' and 'stop'
-        All values should be positive and [exit] < [enter] < [stop].
-
-        {pairs} should be list of pairs of stocks, or the path to a csv file.
-        Each pair is a dict and must include the following attributes
-            Stock_1 : str The stock code of one stock
-            Stock_2 : str The stock code of the other stock
-            beta : float The multiplier of Stock_2, used for the calculation of spread
+        {thresholds} should be a list of size n.
+        The first is the exit threshold and the last is the stop loss threshold.
+        
+        {allocations} should be a list of size n - 2.
         '''
         
         super().__init__()
-        self.threshold_enter = abs(thresholds['enter'])
-        self.threshold_exit = abs(thresholds['exit'])
-        self.threshold_stop = abs(thresholds['stop'])
+        thresholds = sorted([abs(t) for t in thresholds])
+        self.threshold_exit = thresholds[0]
+        self.threshold_stop = thresholds[-1]
+        self.thresholds_enter = thresholds[1:-1]
+        self.allocations = [abs(t) for t in allocations]
+        assert len(self.thresholds_enter) == len(self.allocations)
+        assert sum(self.allocations) <= 1
+        
         if type(pairs) is str:
-            self.watch_list = PairTradeStrategy.load_pairs(pairs)
-        else:
-            self.watch_list = pairs
-        self.initial_cash = initial_cash
+            pairs = PairTradeStrategy.load_pairs(pairs)
+        self.pairs = []
+        for pair in pairs:
+            self.pairs.append(HoldingPair(pair['Stock_1'], pair['Stock_2'], pair['beta']))
+        self.tx_history = []
+        
 
-
-    def analyze_spread(self):
+    def allocate_money(self, cash):
         '''
-        For each pair of stock in the watchlist,
-        recalculate the mean and stdev of its spread using all data available.
+        Notify the strategy the total amount of (leveraged) cash allocated for it.
+        '''
+        
+        money_each_pair = cash / len(self.pairs)
+        for pair in self.pairs:
+            pair.money_allocated = money_each_pair
+
+
+    def transaction_history(self):
+        '''
+        Get the transaction history in pandas dataframe format.
+        '''
+        
+        history = pd.DataFrame(columns=["Date", "Stock", "Direction", "Quantity", "Price"])
+        for date, orders in self.tx_history:
+            for stock, quantity in orders.items():
+                if quantity != 0:
+                    order = {"Date": date, "Stock": stock}
+                    order["Quantity"] = abs(quantity)
+                    order["Direction"] = "Buy" if quantity > 0 else "Sell"
+                    order["Price"] = self._stock_data[stock].loc[date]['CLOSE']
+                    history = history.append(order, ignore_index=True)
+        history.sort_values("Date", inplace=True)
+        return history
+    
+
+    def analyze_spread(self, start=None, end=None):
+        '''
+        For each pair,
+        recalculate the mean and stdev of its spread using data from start to end, inclusive.
         '''
 
-        for pair in self.watch_list:
-            df_stock_x = self._stock_data[pair['Stock_1']]
-            df_stock_y = self._stock_data[pair['Stock_2']]
+        if end is None:
+            end = self.today
+
+        for pair in self.pairs:
+            df_stock_x = self._stock_data[pair.X].loc[:end]
+            df_stock_y = self._stock_data[pair.Y].loc[:end]
+            if start is not None:
+                df_stock_x = df_stock_x.loc[start:]
+                df_stock_y = df_stock_y.loc[start:]
             df = pd.DataFrame(columns=['spread'])
-            df['spread'] = df_stock_x['CLOSE'] - pair['beta'] * df_stock_y['CLOSE']
-            pair['spread_mean'] = df['spread'].mean()
-            pair['spread_std'] = df['spread'].std()
-
+            df['spread'] = df_stock_x['CLOSE'] - pair.beta * df_stock_y['CLOSE']
+            pair.spread_mean = df['spread'].mean()
+            pair.spread_std = df['spread'].std()
+            
 
     def detect_signal(self, pair):
         '''
         For a given pair of stocks, detect the signal, if any.
-        The result is encoded as an integer ranging from -3 to 3.
-
-        There are 6 different signals:
-            3: upward cross stop loss threshold
-            2: upward cross enter threshold
-            1: downward cross exit threshold
-            -1: upward cross (negative) exit threshold
-            -2: downward cross (negative) enter threshold
-            -3: downward cross (negative) stop loss threshold
-
-        0 means no signal.
+        If self.threshold is of size n, then
+        The result is encoded as an integer ranging from -5 to 5:
+        
+            n      upward cross stop loss threshold
+            n-1    upward cross last enter threshold
+            ...
+            2      upward cross first enter threshold
+            1      downward cross exit threshold
+            0      no signal
+            -1     upward cross (negative) exit threshold
+            -2     downward cross (negative) first enter threshold
+            ...
+            -(n-1) downward cross (negative) last enter threshold
+            -n:    downward cross (negative) stop loss threshold
         '''
         
-        df_stock_x = self._stock_data[pair['Stock_1']]
-        df_stock_y = self._stock_data[pair['Stock_2']]
-        beta = pair['beta']
-        spread_mean = pair['spread_mean']
-        spread_std = pair['spread_std']
+        df_stock_x = self._stock_data[pair.X].loc[:self.today]
+        df_stock_y = self._stock_data[pair.Y].loc[:self.today]
 
-        cur_spread = df_stock_x[-1:]['CLOSE'][0] - beta * df_stock_y[-1:]['CLOSE'][0]
-        cur_spread_z = (cur_spread - spread_mean) / spread_std
-        prev_spread = df_stock_x[-2:-1]['CLOSE'][0] - beta * df_stock_y[-2:-1]['CLOSE'][0]
-        prev_spread_z = (prev_spread - spread_mean) / spread_std
+        cur_spread = df_stock_x.iloc[-1]['CLOSE'] - pair.beta * df_stock_y.iloc[-1]['CLOSE']
+        cur_spread_z = (cur_spread - pair.spread_mean) / pair.spread_std
+        prev_spread = df_stock_x.iloc[-2]['CLOSE'] - pair.beta * df_stock_y.iloc[-2]['CLOSE']
+        prev_spread_z = (prev_spread - pair.spread_mean) / pair.spread_std
 
+        thresholds_all = [-self.threshold_exit] + self.thresholds_enter + [self.threshold_stop]
         signal = 0
-        if cur_spread_z >= self.threshold_stop and prev_spread_z < self.threshold_stop:
-            signal = 3
-        elif cur_spread_z >= self.threshold_enter and prev_spread_z < self.threshold_enter:
-            signal = 2
-        elif cur_spread_z <= self.threshold_exit and prev_spread_z > self.threshold_exit:
-            signal = 1
-        elif cur_spread_z >= -self.threshold_exit and prev_spread_z < -self.threshold_exit:
-            signal = -1
-        elif cur_spread_z <= -self.threshold_enter and prev_spread_z > -self.threshold_enter:
-            signal = -2
-        elif cur_spread_z <= -self.threshold_exit and prev_spread_z > -self.threshold_exit:
-            signal = -3
-
+        if cur_spread_z > prev_spread_z:
+            # Upward crossing
+            for i, t in enumerate(thresholds_all):
+                if cur_spread_z >= t > prev_spread_z:
+                    signal = i + 1 if i > 0 else -1
+        else:
+            # Downward crossing
+            for i, t in enumerate(thresholds_all):
+                if cur_spread_z <= -t < prev_spread_z:
+                    signal = -(i + 1) if i > 0 else 1
         return signal
 
 
@@ -234,60 +280,60 @@ class PairTradeStrategy(Strategy):
         For each pair in the watch list, make orders if a signal is detected.
         '''
 
-        positions_by_stock = self.positions()
-        cash_for_each_pair = int(self.initial_cash / len(self.watch_list))
-         
         orders = {}
-        for pair in self.watch_list:
-            stock_x = pair['Stock_1']
-            stock_y = pair['Stock_2']
-            beta = pair['beta']
-
-            x_price = self._stock_data[stock_x][-1:]['CLOSE'][0]
-            y_price = self._stock_data[stock_y][-1:]['CLOSE'][0]
+        for pair in self.pairs:
+            orders[pair.X] = orders.get(pair.X, 0)
+            orders[pair.Y] = orders.get(pair.Y, 0)
+            x_price = self._stock_data[pair.X].loc[self.today]['CLOSE']
+            y_price = self._stock_data[pair.Y].loc[self.today]['CLOSE']
+            pair_price = x_price + abs(pair.beta) * y_price
+            X_quantity_change = 0
+            Y_quantity_change = 0
             
-            pair_price = x_price - beta * y_price
-            # The maximum number of pair to enter without excessing the cash limit
-            # Assuming 100% margin rate
-            if pair_price == 0:
-                continue
-            try:
-                num_pairs = abs(int(cash_for_each_pair / pair_price))
-            except:
-                continue
-            
-            # Positions of the stocks in quantities
-            position_x = positions_by_stock.get(stock_x, 0)
-            position_y = positions_by_stock.get(stock_y, 0)
-            # Position of the pair. The same as the position of X
-            if position_x > 0:
-                position = POSITION_LONG
-            elif position_x < 0:
-                position = POSITION_SHORT
-            else:
-                position = POSITION_EMPTY
+            # Future TODO: Infer pair positions from stock positions
+            # 
+            # For now, pair position is stored and assuming the orders are always accepted
 
             signal = self.detect_signal(pair)
-            
-            if (signal == 3 or signal == 1) and position == POSITION_SHORT:
-                # Stop loss or exiting the SHORT position and make profit. Clear positions
-                orders[stock_x] = -position_x
-                orders[stock_y] = -position_y
-            elif signal == 2 and position != POSITION_SHORT:
-                # Enter by shorting the pair if not already SHORT (prevents doubling up)
-                # Short x + long y (if beta > 0) or short y (if beta < 0)
-                orders[stock_x] = -num_pairs
-                orders[stock_y] = int(num_pairs * beta)
-            elif signal == -2 and position != POSITION_LONG:
-                # Enter by longing the pair if not already LONG (prevents doubling up)
-                # Long x + short y (if beta > 0) or long y (if beta < 0)
-                orders[stock_x] = num_pairs
-                orders[stock_y] = -int(num_pairs * beta)
-            elif (signal == -3 or signal == -1) and position == POSITION_LONG:
-                # Stop loss or exiting the LONG position and make profit. Clear positions
-                orders[stock_x] = -position_x
-                orders[stock_y] = -position_y
+            stop_signal = len(self.thresholds_enter) + 2
+            if abs(signal) in [1, stop_signal]:
+                # Stop loss or exit to make profit. Clear positions
+                X_quantity_change -= pair.X_quantity
+                Y_quantity_change -= pair.Y_quantity
+                pair.level = 0
+            elif 1 < signal < stop_signal:
+                # Crossing SHORT enter thresholds
+                signal_level = signal - 1
+                if pair.level > 0:
+                    # Current position is LONG. Clear first
+                    X_quantity_change -= pair.X_quantity
+                    Y_quantity_change -= pair.Y_quantity
+                    pair.level = 0
+                cum_allocation = sum(self.allocations[:abs(signal_level + pair.level)])
+                money_alloc = pair.money_allocated * cum_allocation
+                X_quantity_change += -abs(int(money_alloc / pair_price))
+                Y_quantity_change += -int(X_quantity_change * pair.beta)
+                pair.level = -signal_level
+            elif -1 > signal > -stop_signal:
+                # Crossing LONG enter thresholds
+                signal_level = signal + 1
+                if pair.level < 0:
+                    # Current position is SHORT. Clear first
+                    X_quantity_change -= pair.X_quantity
+                    Y_quantity_change -= pair.Y_quantity
+                    pair.level = 0
+                cum_allocation = sum(self.allocations[:abs(signal_level + pair.level)])
+                money_alloc = pair.money_allocated * cum_allocation
+                X_quantity_change += abs(int(money_alloc / pair_price))
+                Y_quantity_change += -int(X_quantity_change * pair.beta)
+                pair.level = -signal_level
 
+            orders[pair.X] += X_quantity_change
+            orders[pair.Y] += Y_quantity_change
+            pair.X_quantity += X_quantity_change
+            pair.Y_quantity += Y_quantity_change
+
+        self.tx_history.append([self.today, orders])
         return orders
 
 

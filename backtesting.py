@@ -14,13 +14,14 @@ import util
 from strategy import *
 
 
-def print_order(orders, stock_data, indent=1):
+
+def print_orders(orders, stock_data, indent=1):
     '''
     Print the order in human-readable format. For debug purpose
     '''
 
     for code, quantity in orders.items():
-        price = stock_data[code][-1:]['CLOSE'][0]
+        price = stock_data[code]['CLOSE']
         if quantity > 0:
             print('\t' * indent + f"Bought {quantity} shares of {code} @ {price}")
         elif quantity < 0:
@@ -36,11 +37,17 @@ def print_config(config):
     backtesting_end = config.get('BACKTESTING_END', '?')
     exit_threshold = config.get('EXIT_THRESHOLD', '?')
     enter_threshold = config.get('ENTER_THRESHOLD', '?')
+    enter2_threshold = config.get('ENTER2_THRESHOLD', '?')
+    enter3_threshold = config.get('ENTER3_THRESHOLD', '?')
     stop_threshold = config.get('STOP_THRESHOLD', '?')
+    enter_allocation = config.get('ENTER_ALLOCATION', '?')
+    enter2_allocation = config.get('ENTER2_ALLOCATION', '?')
+    enter3_allocation = config.get('ENTER3_ALLOCATION', '?')
+    max_leverage = config.get('MAX_LEVERAGE', '?')
 
     print(f"Back-testing period=from {backtesting_start} to {backtesting_end}")
-    print(f"enter={enter_threshold}, stop={stop_threshold}, exit={exit_threshold}")
-    
+    print(f"enter={enter_threshold}, {enter2_threshold}, {enter3_threshold}, stop={stop_threshold}, exit={exit_threshold}")
+    print(f"max_leverage={max_leverage}, allocations={enter_allocation}, {enter2_allocation}, {enter3_allocation}")
     
 
 def cash_change(orders, stock_data, tx_cost_per_share=0, tx_cost_per_dollar=0):
@@ -49,24 +56,21 @@ def cash_change(orders, stock_data, tx_cost_per_share=0, tx_cost_per_dollar=0):
     Use the latest daily close price of the stocks as the settlement price.
     
     For now, accept any order with no margin requirement (you can buy/short however much you want).
-    
     '''
     
     change = 0
     for code, quantity in orders.items():
         if not code in stock_data:
             raise Exception("Stock data not found for " + code)
-        settlement_price = stock_data[code][-1:]['CLOSE'][0]
+        settlement_price = stock_data[code]['CLOSE']
         # If quantity > 0, it means buying the instrument, so cash goes down. Vice versa.
         tx_amount = -settlement_price * int(quantity)
         change += tx_amount
-        
         # Apply SEC's fee (per dollar amount)
         change -= abs(tx_amount) * tx_cost_per_dollar
         # Apply broker's fee (per share)
         change -= quantity * tx_cost_per_share
         
-
     return round(change, 2)
 
 
@@ -79,7 +83,7 @@ def net_worth(positions, stock_data):
     for code, quantity in positions.items():
         if not code in stock_data:
             raise Exception("Stock data not found for " + code)
-        settlement_price = stock_data[code][-1:]['CLOSE'][0]
+        settlement_price = stock_data[code]['CLOSE']
         worth += settlement_price * int(quantity)
         
     return round(worth, 2)
@@ -95,52 +99,39 @@ def evaluate(strategy, config):
     training_end = config['TRAINING_END']
     backtesting_start = config['BACKTESTING_START']
     backtesting_end = config['BACKTESTING_END']
+    initial_cash = float(config['INITIAL_CASH'])
+    max_leverage = float(config['MAX_LEVERAGE'])
     tx_cost_per_share = float(config['TX_COST_PER_SHARE'])
     tx_cost_per_dollar = float(config['TX_COST_PER_DOLLAR'])
     risk_free_rate = float(config['RISK_FREE_RATE']) * (pd.to_datetime(backtesting_end) - pd.to_datetime(backtesting_start)).days / 360
 
     # Prepare the data for the strategy
-    stock_codes = []
-    for pair in strategy.watch_list:
-        stock_codes.append(pair['Stock_1'])
-        stock_codes.append(pair['Stock_2'])
-    num_days_test = 0
-    stock_data = util.load_stock_data(config['STOCK_DATA_FOLDER'], stock_codes)
-    stock_data_training = {}
-    stock_data_backtesting = {}
-    for code, df in stock_data.items():
-        stock_data_training[code] = df.loc[training_start : training_end]
-        stock_data_backtesting[code] = df.loc[backtesting_start : backtesting_end]
-        num_days_test = len(stock_data_backtesting[code])
-
-    testing_dates = [d for d in list(stock_data_backtesting.values())[0].index if backtesting_start <= d and d <= backtesting_end]
-    testing_dates.sort()
-
-    # Define initial cash and reset positions to empty
-    initial_cash = 1000000
-    cash = initial_cash
-    strategy.initial_cash = initial_cash
-    strategy.positions({})
+    stock_codes = set()
+    for pair in strategy.pairs:
+        stock_codes.add(pair.X)
+        stock_codes.add(pair.Y)
+    stock_data = util.load_stock_data(config['STOCK_DATA_FOLDER'], list(stock_codes))
     
-    # First feed the "past" data, analyze the spread pattern, and then execute orders
-    strategy.feed(stock_data_training)
-    strategy.analyze_spread()
-    orders = strategy.decide()
-    cash += cash_change(orders, stock_data_training, tx_cost_per_share, tx_cost_per_dollar)
-    strategy.positions(orders, incremental=True)
+    strategy.feed(stock_data)
+    strategy.analyze_spread(training_start, training_end)
+    strategy.allocate_money(initial_cash * max_leverage)
 
-    # Then advance the timeline day by day
+    cash = initial_cash
     daily_tnw = []
+    
+    # Advance the timeline day by day
+    testing_dates = [d for d in list(stock_data.values())[0].index if backtesting_start <= d and d <= backtesting_end]
+    testing_dates.sort()
     for date in testing_dates:
-        # Each day starts with some new data
-        stock_data_single_day = {}
-        for code, df in stock_data_backtesting.items():
-            stock_data_single_day[code] = df.loc[date : date]
-            day = stock_data_single_day[code].index[0]
-        strategy.feed(stock_data_single_day)
+        strategy.now(date)
         # Get and execute orders for the day
         orders = strategy.decide()
+        stock_data_single_day = {}
+        for code, df in stock_data.items():
+            stock_data_single_day[code] = df.loc[date]
         cash += cash_change(orders, stock_data_single_day)
+            
+        # Update the orders in strategy
         strategy.positions(orders, incremental=True)
         # Record the net worth and return
         total_net_worth = cash + net_worth(strategy.positions(), stock_data_single_day)
@@ -174,17 +165,24 @@ def evaluate(strategy, config):
 
 
 
-def evaluate_cumulative_pairs(pairs, config, lower=None, upper=None):
+def evaluate_cumulative_pairs(pairs, config, lower=None, upper=None, tx_log=False):
     '''
     Evaluate pairs cumulatively of a portfolio.
     Returns a pandas DataFrame Object contains the evaluation result.
     '''
 
-    thresholds = {
-        'enter': float(config["ENTER_THRESHOLD"]),
-        'stop': float(config["STOP_THRESHOLD"]),
-        'exit': float(config["EXIT_THRESHOLD"])
-    }
+    thresholds = [
+        float(config["EXIT_THRESHOLD"]),
+        float(config["ENTER_THRESHOLD"]),
+        float(config["ENTER2_THRESHOLD"]),
+        float(config["ENTER3_THRESHOLD"]),
+        float(config["STOP_THRESHOLD"])
+    ]
+    allocations = [
+        float(config["ENTER_ALLOCATION"]),
+        float(config["ENTER2_ALLOCATION"]),
+        float(config["ENTER3_ALLOCATION"])
+    ]    
     if lower is None:
         lower = [1, 1]
     lower_start = int(lower[0])
@@ -200,30 +198,44 @@ def evaluate_cumulative_pairs(pairs, config, lower=None, upper=None):
     for s in range(lower_start - 1, lower_end):
         for e in range(upper_start, upper_end + 1):
             pairs = pairs_original[s : e]
-            strategy = PairTradeStrategy(thresholds, pairs)
+            strategy = PairTradeStrategy(pairs, thresholds, allocations)
             results = evaluate(strategy, config)
+            if tx_log:
+                results = strategy.transaction_history()
             if columns is None:
                 columns = ['Start Pair', 'End Pair'] + list(results.keys())
-                print(*columns, sep='\t')
+                if not tx_log:
+                    print(*columns, sep='\t')
                 df_result = pd.DataFrame(columns=columns)
             results['Start Pair'] = s
             results['End Pair'] = e
-            df_result = df_result.append(results, ignore_index=True)
-            print(*[results[c] if type(results[c]) is str else round(results[c], 5) for c in columns], sep='\t')
+            df_result = df_result.append(results, ignore_index=True, sort=False)
+            if tx_log and len(results) > 0:
+                print(results.set_index("Date"))
+                print()
+            else:
+                print(*[results[c] if type(results[c]) is str else round(results[c], 5) for c in columns], sep='\t')
 
     return df_result
 
 
-def evaluate_individual_pairs(pairs, config, lower=None, upper=None):
+def evaluate_individual_pairs(pairs, config, lower=None, upper=None, tx_log=False):
     '''
     Evaluate pairs individually of a portfolio.
     '''
 
-    thresholds = {
-        'enter': float(config["ENTER_THRESHOLD"]),
-        'stop': float(config["STOP_THRESHOLD"]),
-        'exit': float(config["EXIT_THRESHOLD"])
-    }
+    thresholds = [
+        float(config["EXIT_THRESHOLD"]),
+        float(config["ENTER_THRESHOLD"]),
+        float(config["ENTER2_THRESHOLD"]),
+        float(config["ENTER3_THRESHOLD"]),
+        float(config["STOP_THRESHOLD"])
+    ]
+    allocations = [
+        float(config["ENTER_ALLOCATION"]),
+        float(config["ENTER2_ALLOCATION"]),
+        float(config["ENTER3_ALLOCATION"])
+    ]
     if lower is None:
         lower = [1]
     lower = int(lower[0])
@@ -234,16 +246,23 @@ def evaluate_individual_pairs(pairs, config, lower=None, upper=None):
     columns = None
     df_result = pd.DataFrame()
     for pair in pairs[lower - 1 : upper]:
-        strategy = PairTradeStrategy(thresholds, [pair])
+        strategy = PairTradeStrategy([pair], thresholds, allocations)
         results = evaluate(strategy, config)
+        if tx_log:
+            results = strategy.transaction_history()
         if columns is None:
             columns = ['Stock_1', 'Stock_2'] + list(results.keys())
-            print(*columns, sep='\t')
+            if not tx_log:
+                print(*columns, sep='\t')
             df_result = pd.DataFrame(columns=columns)
         results['Stock_1'] = pair['Stock_1']
         results['Stock_2'] = pair['Stock_2']
-        df_result = df_result.append(results, ignore_index=True)
-        print(*[results[c] if type(results[c]) is str else round(results[c], 5) for c in columns], sep='\t')
+        df_result = df_result.append(results, ignore_index=True, sort=False)
+        if tx_log and len(results) > 0:
+            print(results.set_index("Date"))
+            print()
+        else:
+            print(*[results[c] if type(results[c]) is str else round(results[c], 5) for c in columns], sep='\t')
         
     return df_result
 
@@ -267,6 +286,8 @@ def main(*argv):
                         default=None, nargs='+', help="The upper bound of number of pairs or the ending pair indices.")
     parser.add_argument('-o', '--out', dest="out_file",
                         default=None, help="The file to store backtesting results.")
+    parser.add_argument('-t', '--transaction', dest="transaction_log",
+                        default=False, action='store_true', help="Show transaction log.")
     
     for param in config.keys():
         parser.add_argument(f'--{param}', dest=param,
@@ -282,9 +303,9 @@ def main(*argv):
     if args.in_file:
         pairs = PairTradeStrategy.load_pairs(args.in_file)
         if args.indiv:
-            result = evaluate_individual_pairs(pairs, config, args.lower, args.upper)
+            result = evaluate_individual_pairs(pairs, config, args.lower, args.upper, args.transaction_log)
         else:
-            result = evaluate_cumulative_pairs(pairs, config, args.lower, args.upper)
+            result = evaluate_cumulative_pairs(pairs, config, args.lower, args.upper, args.transaction_log)
     elif args.pairs:
         pairs = []
         for pair in args.pairs:
@@ -294,18 +315,18 @@ def main(*argv):
                 'beta': float(pair[2] if len(pair) >= 3 else 1)
             })
         if args.indiv:
-            result = evaluate_individual_pairs(pairs, config, args.lower, args.upper)
+            result = evaluate_individual_pairs(pairs, config, args.lower, args.upper, args.transaction_log)
         else:
-            result = evaluate_cumulative_pairs(pairs, config, args.lower, args.upper)
+            result = evaluate_cumulative_pairs(pairs, config, args.lower, args.upper, args.transaction_log)
     else:
         for fname in os.listdir(args.in_directory):
             print("\nFile:", fname)
             fname = os.path.join(args.in_directory, fname)
             pairs = PairTradeStrategy.load_pairs(fname)
             if args.indiv:
-                result_cur = evaluate_individual_pairs(pairs, config, args.lower, args.upper)
+                result_cur = evaluate_individual_pairs(pairs, config, args.lower, args.upper, args.transaction_log)
             else:
-                result_cur = evaluate_cumulative_pairs(pairs, config, args.lower, args.upper)
+                result_cur = evaluate_cumulative_pairs(pairs, config, args.lower, args.upper, args.transaction_log)
             result_cur.insert(0, "File", fname)
             result = pd.concat([result, result_cur])
 

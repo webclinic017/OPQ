@@ -17,7 +17,7 @@ from util import *
 
 
 # Control the metrics to calculate. Must match the names defined in "calc.py"
-METRICS = ["CoInt"]
+METRICS = ["CoInt", "PCC_log", "SSD_SMA3"]
 
 
 
@@ -121,8 +121,9 @@ def do_io(q_out, num_workers, total_num_jobs):
                 output_df = pd.DataFrame()
                 output_filename = generate_new_output_file(output_folder)
     output_df.to_csv(output_filename, index=False)
-
-
+    write_log("All jobs completed. Merging output files...", log_file)
+    merge_output(output_folder, os.path.join(output_folder, "out_merged.csv"))
+    write_log("All completed. Program Exit", log_file)
 
 
 def main():
@@ -134,7 +135,6 @@ def main():
     config = load_config()
     stock_data_folder = config['STOCK_DATA_FOLDER']
     output_folder = config['TRAINING_OUTPUT_FOLDER']
-    job_in_file = config['TRAINING_JOB_IN_FILE']
     log_file = config['LOG_FILE']
     training_start = config['TRAINING_START']
     training_end = config['TRAINING_END']
@@ -174,12 +174,6 @@ def main():
     for job_id, stock_x, stock_y in total_jobs:
         if job_id in jobs_done_ids:
             continue
-        if stock_x not in Stock_Data:
-            write_log("Missing stock data for %s" % stock_x, log_file)
-            continue
-        if stock_y not in Stock_Data:
-            write_log("Missing stock data for %s" % stock_y, log_file)
-            continue
         stock_x_df, stock_y_df = Stock_Data[stock_x], Stock_Data[stock_y]
         job = [job_id, stock_x, stock_y, stock_x_df, stock_y_df]
         outstanding_jobs.append(job)
@@ -208,15 +202,13 @@ def main():
     # 5B. Parent process will enqueue jobs
     while len(outstanding_jobs) > 0:
         q_in.put(outstanding_jobs.pop(0))
+    for i in range(num_workers):
+        q_in.put(None) # Mark the end of jobs
     
     # Wait for all child processes to complete
     for proc in processes:
         proc.join()
 
-    write_log("All jobs completed. Merging output files...", log_file)
-    merge_output(output_folder, os.path.join(output_folder, "out_merged.csv"))
-
-    write_log("All completed. Program Exit", log_file)
 
 
 if __name__ == "__main__":
