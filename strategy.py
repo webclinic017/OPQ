@@ -26,6 +26,7 @@ class Strategy:
         Get/Set the point of time of the strategy.
         {date} should be a string
         '''
+        
         if date is not None:
             self.today = date
         return self.today
@@ -239,8 +240,7 @@ class PairTradeStrategy(Strategy):
 
     def analyze_spread(self, start, end):
         '''
-        For each pair,
-        recalculate the mean and stdev of its spread using data from start to end, inclusive.
+        For each pair, update the mean and stdev of its spread.
         '''
 
         for pair in self.pairs:
@@ -254,17 +254,18 @@ class PairTradeStrategy(Strategy):
 
     def detect_level(self, pair, x_price=None, y_price=None):
         '''
-        For a given pair of stocks, detect the level, if any.
+        For a given pair of stocks, calculate the current signal level of their spread.
+        The return value is an integer. Suppose there are n enter thresholds:
         
-            n+1    stop loss threshold and above
-            n      (n-1)-th to n-th threshold
+            n+2    stop loss threshold and above
+            n+1    n-th enter threshold to stop loss threshold
             ...
-            1      exit to 1st enter threshold
-            0      -exit threshold to exit threshold
-            -1     -exit to 1st neagtive enter threshold
+            1      exit threshold to 1st enter threshold
+            0      negative exit threshold to exit threshold
+            -1     negative exit threshold to negative 1st enter threshold
             ...
-            -n     -(n-1)-th to (-n)-th neagtive enter threshold
-            -(n+1) negative stop loss threshold and below
+            -(n+1) negative n-th enter threshold to negative stop loss threshold
+            -(n+2) negative stop loss threshold and below
         '''
 
         if x_price is None:
@@ -288,7 +289,7 @@ class PairTradeStrategy(Strategy):
 
     def decide(self, stock_prices=None):
         '''
-        For each pair in the watch list, make orders if a signal is detected.
+        For each pair in the watch list, make orders according to current postion and signal level.
         '''
 
         orders = {}
@@ -305,24 +306,22 @@ class PairTradeStrategy(Strategy):
             X_quantity_change = 0
             Y_quantity_change = 0
 
-            # Get the level of spread today and derive target pair position after today
             level = self.detect_level(pair, x_price, y_price)
-            
             if level == 0:
-                # Between positive exit and negative exit, empty position
+                # Between positive exit and negative exit, target position is empty
                 target_pair_position = 0
             elif abs(level) == 1:
-                # Between exit and 1st enter, maintain position
+                # Between exit and 1st enter, target position is the same as current position
                 target_pair_position = pair.position
             elif abs(level) == len(self.thresholds_enter) + 2:
-                # Beyond stop loss threshold, empty position
+                # Beyond stop loss threshold, target position is empty
                 target_pair_position = 0
             else:
-                # Long if level < 0, Short if level > 0 
+                # Target position is Long if level < 0, Short if level > 0 
                 direction = 1 if level < 0 else -1
                 target_pair_position = direction * (abs(level) - 1)
 
-            # Make trades if target position is different
+            # Make trades if target position is different from current position
             if pair.position != target_pair_position:
                 # Derive the target quantity of X and Y
                 money_alloc = pair.money_allocated * sum(self.allocations[:abs(target_pair_position)])
@@ -339,14 +338,12 @@ class PairTradeStrategy(Strategy):
                 X_quantity_change = X_target_quantity - pair.X_quantity
                 Y_quantity_change = Y_target_quantity - pair.Y_quantity
                 pair.position = target_pair_position
+                pair.X_quantity = X_target_quantity
+                pair.Y_quantity = Y_target_quantity
 
             # Finalize orders
             orders[pair.X] += X_quantity_change
             orders[pair.Y] += Y_quantity_change
-            pair.X_quantity += X_quantity_change
-            pair.Y_quantity += Y_quantity_change
-
-            
 
         self.tx_history.append([self.today, orders])
         return orders

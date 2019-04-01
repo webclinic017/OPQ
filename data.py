@@ -84,6 +84,10 @@ class WorkerThread(threading.Thread):
 
     @staticmethod
     def get_response(url, headers=dict()):
+        '''
+        Ger raw response in string using HTTP Request.
+        '''
+        
         headers['User-Agent'] = "Mozilla/5.0 (X11; Linux i686) AppleWebKit/537.17 (KHTML, like Gecko) Chrome/24.0.1312.27 Safari/537.17"
         try:
             req = request.Request(url, headers=headers)
@@ -108,15 +112,16 @@ class WorkerThread(threading.Thread):
         
 
     def run(self):
+        '''
+        Crawl the webpage and find the stock's current price.
+        '''
+        
         ticker = self.stock_code.split('.')[0]
         url = f"https://finance.yahoo.com/quote/{ticker}"
         rdata = WorkerThread.get_response(url)
         res = re.findall(r"<span.*?data-reactid=['\"]34['\"]>([0-9\.,]*?)</span>", rdata)
         if res:
             WorkerThread.Stock_Data[self.stock_code] = float(res[0].replace(',',''))
-
-
-
 
 
 
