@@ -138,7 +138,7 @@ def calc_SSD_SMA3(stock_x, stock_y):
 def calc_CoInt(stock_x, stock_y):
     '''
     Simplified cointegration method. Assume that
-        X - beta * Y = u
+        Y - beta * X = u
     and u is "stationary".
     Find the beta, Coeffecient or Variation of u and R-squared of the linear regression.
     '''

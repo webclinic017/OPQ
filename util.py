@@ -7,6 +7,7 @@ Project utility funcitons.
 
 import os
 import time
+import datetime
 
 import pandas as pd
 
@@ -23,6 +24,19 @@ def write_log(msg, log_filename):
         F.write(full_msg + '\n')
     print(full_msg)
 
+
+def get_us_time(fmt="%Y-%m-%d"):
+    '''
+    Get the U.S. time (east coast) in str
+    '''
+
+    tz_us = datetime.timezone(datetime.timedelta(hours=-5))
+    tz_hk = datetime.timezone(datetime.timedelta(hours=8))
+    dt = datetime.datetime(*time.localtime()[:6], tzinfo=tz_hk)
+    if fmt:
+        return dt.astimezone(tz_us).strftime(fmt)
+    else:
+        return dt.astimezone(tz_us)
 
 
 def create_dir_and_file(filepath, overwrite=False):
@@ -105,7 +119,7 @@ def merge_output(input_folder, output_file):
         except:
             continue
         out_df = pd.concat([out_df, df])  
-    out_df = out_df.drop_duplicates(subset='index', keep='first')
+    out_df = out_df.drop_duplicates(keep='first')
     
     create_dir_and_file(output_file)
     out_df.to_csv(output_file, index=False)

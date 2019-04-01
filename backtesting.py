@@ -118,6 +118,7 @@ def evaluate(strategy, config):
 
     cash = initial_cash
     daily_tnw = []
+    leverages = []
     
     # Advance the timeline day by day
     testing_dates = [d for d in list(stock_data.values())[0].index if backtesting_start <= d and d <= backtesting_end]
@@ -135,6 +136,15 @@ def evaluate(strategy, config):
         strategy.positions(orders, incremental=True)
         # Record the net worth and return
         total_net_worth = cash + net_worth(strategy.positions(), stock_data_single_day)
+
+        # Calculate the leverage
+        market_value = cash
+        for stock, quantity in strategy.positions().items():
+            if quantity > 0:
+                market_value += quantity * stock_data_single_day[stock]['CLOSE']
+        leverage = market_value / total_net_worth
+        leverages.append(leverage)
+        
         daily_tnw.append(total_net_worth)
 
     # Calculate the values for the performance metrics
@@ -158,7 +168,9 @@ def evaluate(strategy, config):
         "Up Percentage": len([r for r in daily_return if r > 0]) / len(daily_return),
         "Max Drawdown": (min(daily_tnw_aug) - max(daily_tnw_aug)) / max(daily_tnw_aug),
         "Skewness": df_metrics['ret'].skew(),
-        "Kurtosis": df_metrics['ret'].kurt()
+        "Kurtosis": df_metrics['ret'].kurt(),
+        "Avg Leverage": sum(leverages) / len(leverages),
+        "Max Leverage": max(leverages)
     }
 
     return performance_metrics
@@ -267,7 +279,7 @@ def evaluate_individual_pairs(pairs, config, lower=None, upper=None, tx_log=Fals
     return df_result
 
 
-def main(*argv):
+def main(*argv, **kwargs):
 
     config = util.load_config()
 
@@ -297,6 +309,8 @@ def main(*argv):
     for param in config:
         if getattr(args, param) is not None:
             config[param] = getattr(args, param)
+        if param in kwargs:
+            config[param] = kwargs[param]
     print_config(config)
 
     result = pd.DataFrame()
@@ -322,6 +336,8 @@ def main(*argv):
         for fname in os.listdir(args.in_directory):
             print("\nFile:", fname)
             fname = os.path.join(args.in_directory, fname)
+            if not fname[-4:] == '.csv':
+                continue
             pairs = PairTradeStrategy.load_pairs(fname)
             if args.indiv:
                 result_cur = evaluate_individual_pairs(pairs, config, args.lower, args.upper, args.transaction_log)
@@ -333,8 +349,7 @@ def main(*argv):
     if args.out_file is not None:
         result.to_csv(args.out_file, index=False)
                 
-
-    input("\nDone")
+    print("\nDone")
 
 
 
