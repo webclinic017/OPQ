@@ -17,7 +17,11 @@ import pandas as pd
 from util import *
 from strategy import *
 import data
-
+try:
+    import placing
+except:
+    print("! IB API is not loaded !")
+    placing = None
 
 
 def main(*argv):
@@ -30,7 +34,7 @@ def main(*argv):
 
     write_log("Top Secret Program Start", log_file)
 
-    ustime = get_us_time()
+    ustime = get_us_time('%Y_%m_%d_%H_%M_%S')
 
     asset_file = config["ASSET_FILE"]
     asset_history_folder = config["ASSET_HISTORY_FOLDER"]
@@ -100,10 +104,6 @@ def main(*argv):
         }, ignore_index=True)
     print("\nEnd of Today's Orders")
 
-
-    # Future: Use IBAPI to exec orders
-    #
-
     # File I/O
     if not os.path.isdir(asset_history_folder):
         os.makedirs(asset_history_folder)
@@ -113,11 +113,21 @@ def main(*argv):
     strat.dump_pair_info(asset_file_today)
     tx_df.to_csv(tx_file_today, index=False)
 
-    write_log(f"Suggested orders have been saved to {asset_file_today}", log_file)
+    write_log(f"Suggested orders have been saved to {tx_file_today}", log_file)
     write_log(f"Updated positions have been saved to {asset_file} and {asset_file_today}", log_file)
 
-    write_log(f"Program Exit. Good night!", log_file)
-    input()
+    # Try to use IBAPI to exec orders
+    print(" ========= IMPORTANT ======== ")
+    if placing is not None:
+        placing.place_orders(orders)
+        write_log("Placed orders through IB TWS API", log_file)
+    else:
+        write_log("IB TWS API was not imported. Please manually place orders", log_file)
+    print(" ========= IMPORTANT ======== ")
+
+    
+
+    write_log(f"Program Exit", log_file)
 
 
 if __name__ == "__main__":

@@ -143,7 +143,7 @@ def calc_CoInt(stock_x, stock_y):
     Find the beta, Coeffecient or Variation of u and R-squared of the linear regression.
     '''
 
-    df = stock_x.join(stock_y, how="inner", lsuffix="_X", rsuffix="_Y").dropna()
+    df = stock_x.join(stock_y, how="inner", lsuffix="_X", rsuffix="_Y").dropna(subset=['CLOSE_X', 'CLOSE_Y'])
 
     linreg = st.linregress(df['CLOSE_X'], df['CLOSE_Y'])
     beta = linreg.slope
