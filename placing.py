@@ -34,12 +34,45 @@ from ibapi.scanner import ScanData
 
 
 
+
+EXCHANGES_MAPPING = {
+    "OQ": "ISLAND",
+    "N": "NYSE",
+    "Z": "BATS",
+    "PK": "PINK",
+    "EI": "IEX",
+    "A": "AMEX"
+}
+EXCHANGES_MAPPING_INVERSED = {
+    'NASDAQ': 'OQ',
+    'NYSE': 'N',
+    'BATS': 'Z',
+    'PINK': 'PK',
+    'IEX': 'EI',
+    'AMEX': 'A'
+}
+
+
+
 def place_orders(orders):
     '''
     Submit orders.
     '''
     
     app = TestApp(orders_to_place=orders)
+
+    app.connect("127.0.0.1", 7497, clientId=0)
+
+    app.run()
+
+
+def place_orders_by_target_positions(target_positions, account):
+    '''
+    A better way to place orders: given the target positions,
+    let the IB API fetches the actual current positions and derive the orders to place.
+    '''
+
+    app = TestApp(account=account, target_positions=target_positions)
 
     app.connect("127.0.0.1", 7497, clientId=0)
 
@@ -137,7 +170,7 @@ class TestWrapper(wrapper.EWrapper):
 # ! [socket_init]
 class TestApp(TestWrapper, TestClient):
     
-    def __init__(self, orders_to_place={}):
+    def __init__(self, orders_to_place={}, target_positions=None, account=None):
         TestWrapper.__init__(self)
         TestClient.__init__(self, wrapper=self)
         # ! [socket_init]
@@ -150,15 +183,42 @@ class TestApp(TestWrapper, TestClient):
         self.simplePlaceOid = None
 
         self.orders_to_place = orders_to_place
-
+        self.target_positions = target_positions
+        self.current_positions = {}
+        self.account = account
+        
       
     def start(self):
         if self.started:
             return
         self.started = True
 
-        for stock_code, quantity in self.orders_to_place.items():
+        if self.target_positions is not None:
+            self.reqPositions()
+        else:
+            self.placeAllOrders()
 
+
+    def position(self, account: str, contract: Contract, position: float, avgCost: float):
+        super().position(account, contract, position, avgCost)
+        if self.account is None or account == self.account:
+            stock_code = contract.symbol + '.' + EXCHANGES_MAPPING_INVERSED[contract.exchange]
+            self.current_positions[stock_code] = int(position)
+
+            
+    def positionEnd(self):
+        super().positionEnd()
+        self.orders_to_place = {}
+        for stock_code, target_position in self.target_positions.items():
+            current_position = self.current_positions.get(stock_code, 0)
+            if target_position != current_position:
+                self.orders_to_place[stock_code] = target_position - current_position
+        self.placeAllOrders()
+        
+            
+
+    def placeAllOrders(self):
+        for stock_code, quantity in self.orders_to_place.items():
             if quantity == 0:
                 continue
         
@@ -169,18 +229,8 @@ class TestApp(TestWrapper, TestClient):
             contract.secType = "STK"
             contract.currency = "USD"
             contract.exchange = "SMART"
-            if exchange == "OQ":
-                contract.primaryExchange = "ISLAND"
-            elif exchange == "N":
-                contract.primaryExchange = "NYSE"
-            elif exchange == "Z":
-                contract.primaryExchange = "BATS"
-            elif exchange == "PK":
-                contract.primaryExchange = "PINK"
-            elif exchange == "EI":
-                contract.primaryExchange = "IEX"
-            elif exchange == "A":
-                contract.primaryExchange = "AMEX"
+            if exchange in EXCHANGES_MAPPING:
+                contract.primaryExchange = EXCHANGES_MAPPING[exchange]
 
             order = Order()
             order.action = "BUY" if quantity > 0 else "SELL"
@@ -201,9 +251,6 @@ class TestApp(TestWrapper, TestClient):
         super().nextValidId(orderId)
         self.nextValidOrderId = orderId
         self.start()
-
-
-
 
 
 

@@ -186,6 +186,18 @@ class PairTradeStrategy(Strategy):
         self.tx_history = []
 
 
+    def positions(self):
+        '''
+        Get the positions by stock.
+        '''
+
+        positions = {}
+        for pair in self.pairs:
+            positions[pair.X] = positions.get(pair.X, 0) + pair.X_quantity
+            positions[pair.Y] = positions.get(pair.Y, 0) + pair.Y_quantity
+        return positions
+
+
     def load_pair_info(self, filename):
         '''
         Load the pair information from a local csv file.

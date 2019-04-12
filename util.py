@@ -30,7 +30,7 @@ def get_us_time(fmt="%Y-%m-%d"):
     Get the U.S. time (east coast) in str
     '''
 
-    tz_us = datetime.timezone(datetime.timedelta(hours=-5))
+    tz_us = datetime.timezone(datetime.timedelta(hours=-4))
     tz_hk = datetime.timezone(datetime.timedelta(hours=8))
     dt = datetime.datetime(*time.localtime()[:6], tzinfo=tz_hk)
     if fmt:

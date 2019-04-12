@@ -36,6 +36,7 @@ def main(*argv):
 
     ustime = get_us_time('%Y_%m_%d_%H_%M_%S')
 
+    account_id = config["ACCOUNT_ID"]
     asset_file = config["ASSET_FILE"]
     asset_history_folder = config["ASSET_HISTORY_FOLDER"]
     transaction_history_folder = config["TRANSACTION_HISTORY_FOLDER"]
@@ -97,10 +98,7 @@ def main(*argv):
         price = stock_prices[stock]
         print(f"{direction:8}{stock:12}{str(quantity):12}{str(price):12}")
         tx_df = tx_df.append({
-            "Direction": direction,
-            "Stock": stock,
-            "Quantity": quantity,
-            "Price": price
+            "Direction": direction, "Stock": stock, "Quantity": quantity, "Price": price
         }, ignore_index=True)
     print("\nEnd of Today's Orders")
 
@@ -119,7 +117,9 @@ def main(*argv):
     # Try to use IBAPI to exec orders
     print(" ========= IMPORTANT ======== ")
     if placing is not None:
-        placing.place_orders(orders)
+        #placing.place_orders(orders)
+        target_positions = strat.positions()
+        placing.place_orders_by_target_positions(target_positions, account_id)
         write_log("Placed orders through IB TWS API", log_file)
     else:
         write_log("IB TWS API was not imported. Please manually place orders", log_file)
