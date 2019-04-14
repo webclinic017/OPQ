@@ -186,18 +186,6 @@ class PairTradeStrategy(Strategy):
         self.tx_history = []
 
 
-    def positions(self):
-        '''
-        Get the positions by stock.
-        '''
-
-        positions = {}
-        for pair in self.pairs:
-            positions[pair.X] = positions.get(pair.X, 0) + pair.X_quantity
-            positions[pair.Y] = positions.get(pair.Y, 0) + pair.Y_quantity
-        return positions
-
-
     def load_pair_info(self, filename):
         '''
         Load the pair information from a local csv file.
@@ -299,15 +287,15 @@ class PairTradeStrategy(Strategy):
         return level
 
 
-    def decide(self, stock_prices=None):
+    def derive_target_positions(self, stock_prices=None):
         '''
-        For each pair in the watch list, make orders according to current postion and signal level.
+        Derive the target positions by stock.
+        For each pair, calculate the pair's target position.
+        Then finally sum up the pairs' stock positions to aggregated stock positions.
         '''
 
-        orders = {}
+        target_positions = {}
         for pair in self.pairs:
-            orders[pair.X] = orders.get(pair.X, 0)
-            orders[pair.Y] = orders.get(pair.Y, 0)
             if stock_prices is not None:
                 x_price = stock_prices[pair.X]
                 y_price = stock_prices[pair.Y]
@@ -315,8 +303,6 @@ class PairTradeStrategy(Strategy):
                 x_price = self._stock_data[pair.X].loc[self.today]['CLOSE']
                 y_price = self._stock_data[pair.Y].loc[self.today]['CLOSE']
             pair_price = y_price + abs(pair.beta) * x_price
-            X_quantity_change = 0
-            Y_quantity_change = 0
 
             level = self.detect_level(pair, x_price, y_price)
             if level == 0:
@@ -333,29 +319,45 @@ class PairTradeStrategy(Strategy):
                 direction = 1 if level < 0 else -1
                 target_pair_position = direction * (abs(level) - 1)
 
-            # Make trades if target position is different from current position
-            if pair.position != target_pair_position:
-                # Derive the target quantity of X and Y
-                money_alloc = pair.money_allocated * sum(self.allocations[:abs(target_pair_position)])
-                if target_pair_position > 0:
-                    # Target position is LONG
-                    Y_target_quantity = int(money_alloc / pair_price)
-                elif target_pair_position < 0:
-                    # Target position is SHORT
-                    Y_target_quantity = -int(money_alloc / pair_price)
-                else:
-                    # Target position is EMPTY
-                    Y_target_quantity = 0
-                X_target_quantity = -int(Y_target_quantity * pair.beta)
-                X_quantity_change = X_target_quantity - pair.X_quantity
-                Y_quantity_change = Y_target_quantity - pair.Y_quantity
-                pair.position = target_pair_position
-                pair.X_quantity = X_target_quantity
-                pair.Y_quantity = Y_target_quantity
+            # Derive the target quantity of X and Y
+            money_alloc = pair.money_allocated * sum(self.allocations[:abs(target_pair_position)])
+            if target_pair_position > 0:
+                # Target position is LONG
+                Y_target_quantity = int(money_alloc / pair_price)
+            elif target_pair_position < 0:
+                # Target position is SHORT
+                Y_target_quantity = -int(money_alloc / pair_price)
+            else:
+                # Target position is EMPTY
+                Y_target_quantity = 0
+            X_target_quantity = -int(Y_target_quantity * pair.beta)
+            pair.position = target_pair_position
+            pair.X_quantity = X_target_quantity
+            pair.Y_quantity = Y_target_quantity
 
-            # Finalize orders
-            orders[pair.X] += X_quantity_change
-            orders[pair.Y] += Y_quantity_change
+            # Update the target by-stock positions
+            target_positions[pair.X] = target_positions.get(pair.X, 0) + X_target_quantity
+            target_positions[pair.Y] = target_positions.get(pair.Y, 0) + Y_target_quantity
+
+        return target_positions     
+        
+
+    def decide(self, stock_prices=None):
+        '''
+        First, get the target by-stock positions.
+        For each stock, make trades if its target position is different from its current position.
+        '''
+
+        target_positions = self.derive_target_positions(stock_prices)
+        current_positions = self.positions()
+        orders = {}
+        for stock_code, current_position in current_positions.items():
+            if stock_code not in target_positions:
+                orders[stock_code] = -current_position
+        for stock_code, target_position in target_positions.items():
+            current_position = current_positions.get(stock_code, 0)
+            if target_position != current_position:
+                orders[stock_code] = target_position - current_position
 
         self.tx_history.append([self.today, orders])
         return orders

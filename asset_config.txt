@@ -1,3 +1,4 @@
+LOG_FILE	log/log.txt
 ASSET_FILE	secret_asset.csv
 ASSET_HISTORY_FOLDER	history/asset/
 TRANSACTION_HISTORY_FOLDER	history/transaction/
